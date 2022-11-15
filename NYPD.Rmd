@@ -1,0 +1,236 @@
+---
+title: "NYPD Shooting Report"
+author: "R.B"
+date: "2022-11-11"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Overview
+This document is part of the course "Data Science As A Field''.
+It shows my attempt to analyze, visualise and model the NYPD shooting data from the data.cityofnewyork.us website.
+
+* I used these libraies in my project:
+  * tidyverse
+  * lubridate
+  * magrittr
+  * ggplot2
+ 
+```{r load_libraries, message=FALSE, echo = FALSE}
+library(tidyverse)
+library(lubridate)
+library(magrittr)
+library(ggplot2)
+```
+
+## Load NYPD Shooting data set
+
+### Step 1 - data downloading:
+
+```{r data load, echo=TRUE}
+url_in <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+NYPD_data <- read.csv(url_in)
+               
+```
+
+## Summary of data, cleanup of dataset
+
+### Step 2 - Add to your Rmd document a summary of the data and clean up your dataset: 
+
+data summary:
+
+```{r summary_NYPD, message=FALSE}
+summary(NYPD_data)
+```
+
+Columns names:
+
+```{r Columns_names, message=FALSE}
+colnames(NYPD_data)
+```
+
+* Now we drop the unused columns 
+  * remove these columns
+  * Incident_Key 
+  * Jurisdicition_Code 
+  * Occur_Time 
+  * Precinct 
+  * Location_Desc 
+  * X_COORD_CD 
+  * Y_COORD_CD 
+  * Latitude 
+  * Longitude 
+  * Long_Lat
+
+and we look at the cleaned data:
+
+```{r remove_columns, message=FALSE}
+NYPD_data_cleaned <- NYPD_data %>%
+  select(-c(INCIDENT_KEY, OCCUR_TIME, PRECINCT, JURISDICTION_CODE, LOCATION_DESC, X_COORD_CD, Y_COORD_CD, Latitude, Longitude,Lon_Lat ))
+
+summary(NYPD_data_cleaned)
+colnames(NYPD_data_cleaned)
+```
+
+change columns data types and give meaningful names:
+
+```{r change_dtype, message=FALSE}
+NYPD_data_cleaned [NYPD_data_cleaned ==""]<-"UNKNOWN"
+NYPD_data_cleaned <- NYPD_data_cleaned %>%
+  rename(date = 'OCCUR_DATE') %>%
+  mutate(perp_age_group = factor(PERP_AGE_GROUP)) %>%
+  mutate(perp_sex = factor(PERP_SEX)) %>%
+  mutate(perp_race = factor(PERP_RACE)) %>%
+  mutate(vic_age_group = factor(VIC_AGE_GROUP)) %>%
+  mutate(vic_sex = factor(VIC_SEX)) %>%
+  mutate(vic_race = factor(VIC_RACE)) %>%
+  mutate(vic_age_group = factor(VIC_AGE_GROUP)) %>%
+  mutate(borough = factor(BORO))  %>%
+  rename(murder_flag = 'STATISTICAL_MURDER_FLAG') %>%
+  mutate(date = mdy(date)) %>%
+  mutate(year = year(date)) %>%
+  mutate(population = case_when(borough == "BRONX" ~ 1427000, 
+                                borough == "BROOKLYN" ~ 2577000,
+                                borough == "MANHATTAN" ~ 1629000,
+                                borough == "QUEENS" ~ 2271000,
+                                borough == "STATEN ISLAND" ~ 476000))%>%
+                                
+  filter(perp_age_group != 1020) %>%
+  filter(perp_age_group != 224) %>%
+  filter(perp_age_group != 940)
+
+NYPD_data_cleaned <- NYPD_data_cleaned %>%
+  select(-c(PERP_AGE_GROUP, PERP_SEX, PERP_RACE, VIC_AGE_GROUP, VIC_SEX, VIC_RACE, BORO))
+
+```
+
+and filter all the NA rows:
+
+```{r filter_na, message=FALSE, echo = T, results = 'hide'}
+NYPD_data_cleaned  %>% drop_na(murder_flag,perp_age_group,perp_sex,perp_race,vic_age_group, vic_sex, vic_race, borough)
+```
+## Part 3: visualization and analysis
+In this part, we want to analyze the data to make conclusions.
+
+First, we want to see if the sum of the incidents is stable over the years.
+```{r add_year, message=FALSE}
+NYPD_data_by_year <-NYPD_data_cleaned %>%
+mutate(year = year(date)) %>%
+group_by(year) %>%
+summarise(incident_count = n()) %>%
+select(year, incident_count)
+
+ggplot(NYPD_data_by_year, aes(year, incident_count)) +
+  geom_line() 
+
+```
+we can see that the rate is going down until 2019 and then going up sharply (important notice - that document was made in 2022, in future years results may vary)
+for sanity check I searched on the internet for this fact and found this article: https://www.wsj.com/articles/new-york-city-homicides-and-shootings-rose-dramatically-in-2020-11610055243
+
+Next, I tried to see if the sharp jump in the city is because of one of the boroughs, but we can see that this pattern exists in all of them.
+
+```{r year_boro, message=FALSE}
+NYPD_data_by_year <-NYPD_data_cleaned %>%
+
+group_by(year, borough) %>%
+summarise(incident_count = n()) %>%
+select(borough, year, incident_count)
+ggplot(NYPD_data_by_year, aes(year, incident_count, colour = borough)) +
+  geom_line() 
+
+```
+In the previews graph we saw the absolute values of the incidents, in order to figure out which of the boroughs is the most dangerous I should normalize the results according to the population of the borough.
+
+```{r prec_boro, message=FALSE}
+NYPD_data_population_prec <- NYPD_data_cleaned %>%
+  group_by(borough,population) %>%
+  summarise(incident_count = n()) %>%
+  mutate(incident_per_1000 = round(incident_count*1000/population, 2))
+
+#NYPD_data_population_prec
+
+ggplot (data=NYPD_data_population_prec, aes(borough,incident_per_1000)) +
+  geom_label(aes(label = incident_per_1000)) 
+
+
+```
+Next, I tried to examine in which borough is it more likely to get killed in an incident, to figure out if there are any visible differences in the incidents that our data can't tell.
+We can see the mean values are more or less the same.
+```{r kill_boro, message=FALSE}
+
+
+               
+NYPD_data_killed_or_Not <- NYPD_data_cleaned %>%
+mutate(year = year(date)) %>%
+filter(murder_flag == 'true')%>%
+group_by(borough, year) %>%
+  summarise(cases = n())
+
+NYPD_data_killed_or_Not <- NYPD_data_cleaned %>%
+  mutate(year = year(date)) %>%
+  group_by(year, borough) %>%
+  summarise(incident_count = n(), murders = sum(murder_flag == 'true')) %>%
+  mutate (event_to_kill_prec = murders/incident_count) %>%
+
+  ungroup()
+  
+
+#NYPD_data_killed_or_Not
+
+ggplot (data=NYPD_data_killed_or_Not) +
+  geom_point(mapping = aes(x=year, y=event_to_kill_prec)) + 
+  facet_wrap(~borough, nrow=3)
+
+```
+To see if the incidents count in each year per borough makes sense I tried to make a linear model of the results.
+We can see that the model works well in a small incident count but did worse in years and boroughs where the count was big. We could try and explain this result as an anomaly of data points.
+
+```{r lm_model, message=FALSE}
+mod <- lm(murders ~ incident_count, data = NYPD_data_killed_or_Not)
+summary(mod)
+NYPD_data_killed_or_Not <- NYPD_data_killed_or_Not %>%
+  mutate(prediction = predict(mod))
+
+ggplot(data = NYPD_data_killed_or_Not) +
+  geom_point(aes(x = incident_count, y = murders ), color = "blue") +
+  geom_point(aes(x = incident_count, y = prediction ), color = "red")
+
+
+
+```
+The last attempt to explain the result was plotting the age groups of the shooters and the victims.
+The first thing we can see is a huge amount of "unknown" shooters. But from the data, ignoring the unknown we can see that both the shooters and the victims are mostly 18-44 years old.
+
+```{r age_groups, message=FALSE}
+NYPD_data_by_age <- NYPD_data_cleaned %>%
+  group_by(perp_age_group, vic_age_group) %>%
+  summarise(cnt = n()) %>%
+  filter(vic_age_group != 'UNKNOWN') %>%
+  filter(perp_age_group != 'UNKNOWN') %>%
+  mutate(freq = round(cnt / sum(cnt),2)) %>%
+  arrange(desc(freq))
+
+ggplot (data=NYPD_data_cleaned) +
+  geom_bar (mapping = aes(x=perp_age_group, fill=vic_age_group), position = "dodge")
+
+ggplot (data=NYPD_data_cleaned) +
+  geom_bar (mapping = aes(x=vic_age_group, fill=perp_age_group), position = "dodge")
+```
+## Conclusion
+
+* In this project, I made an attempt to explain the data of the NYPD shooting dataset from the Cityofnewyotk website. My attempts have been concentrated on the total sum of incidents and zoomed in on boroughs and ages. The main conclusions from the graphs are:
+  * There was a decline in incident count in NY until 2020 and then a steep incline.
+  * The same conclusion of incident count took place in all the boroughs in the dataset.
+  * The most dangerous borough was  the Bronx and the last one was Staten Island
+  * The percentage of murders was similar in all boroughs - approximately 0.25. 0.75 survival rate.
+  * The ages of most shooters and  victims were 18-44.
+
+### Bias analysis
+
+In my project, I tried to investigate some of the factors that affect the chance of someone being a part of a shooting event and the survival rate. The first and most important bias I see while analyzing this data will be Analytics Bias - Analytics bias is caused by incomplete data sets and a lack of context around those data sets. In our dataset, we could only see the events that were documented - a shooting in the street that "missed the target" is not documented but can influence the conclusion - how dangerous a borough is and what percentage of the shootings was fatal. Another huge bias source is the "unknown" values in different columns. These unknowns are crimes that happened and could influence our results. For example, as we can see in the shoots ages graph - the largest bar is the "unknown" bar. Another source of bias is Outliers bias - in our linear model of shooting-deaths correlation, we can see that in years when the number of incidents was larger in a particular borough my model did worse than when the number was smaller. We see in our graph that these years and boroughs could be considered outliers and could bias our model.
+One bias source I mitigated was the an analytic bias of the count of incidents. I mitigated it in a way of normalizing the data to borough population.
